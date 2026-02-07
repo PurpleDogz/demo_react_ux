@@ -12,9 +12,9 @@ export default function ReportsPage() {
     <div className={styles.page}>
       <header className={styles.header}>
         <div className={styles.titleBlock}>
-          <h1 className={styles.title}>Report Explorer</h1>
+          <h1 className={styles.title}>Climate Impact Explorer</h1>
           <p className={styles.subtitle}>
-            Toggle published, pick a report, filter by scenario &amp; metric
+            Planetrics scenario metrics applied to the Future Fund Portfolio
           </p>
         </div>
         <div className={styles.themeToggle}>
