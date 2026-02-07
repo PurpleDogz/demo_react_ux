@@ -1,4 +1,5 @@
 import styles from "./page.module.css";
+import Link from "next/link";
 import ThemeSwitcher from "@/components/ThemeSwitcher";
 import DataGrid from "@/components/DataGrid";
 import InputShowcase from "@/components/InputShowcase";
@@ -15,7 +16,12 @@ export default function Home() {
             Switch between 5 themes to see AG Grid and input controls adapt
           </p>
         </div>
-        <ThemeSwitcher />
+        <div className={styles.headerActions}>
+          <Link href="/reports" className={styles.navLink}>
+            Report Explorer &rarr;
+          </Link>
+          <ThemeSwitcher />
+        </div>
       </header>
       <div className={styles.sections}>
         <section className={styles.section}>
