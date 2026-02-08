@@ -10,11 +10,9 @@ import {
   type SummaryRow,
   type RunDataRow,
   type RunDataParams,
-  SCENARIOS,
-  METRICS,
-  SECTOR_LIST,
-  SUB_SECTORS_BY_SECTOR,
+  type FiltersResponse,
   climateImpactReports,
+  climateImpactFilters,
   climateImpactScenarioSummary,
   climateImpactSectorSummary,
   climateImpactSubSectorSummary,
@@ -58,8 +56,20 @@ function MultiSelect({
     if (next.length > 0) onChange(next);
   };
 
+  const toggleAll = () => {
+    if (selected.length === options.length) {
+      // All are selected, deselect all but the first one
+      onChange([options[0]]);
+    } else {
+      // Not all are selected, select all
+      onChange([...options]);
+    }
+  };
+
+  const allSelected = selected.length === options.length;
+
   const summary =
-    selected.length === options.length
+    allSelected
       ? "All"
       : selected.length === 1
         ? selected[0]
@@ -80,6 +90,15 @@ function MultiSelect({
         </button>
         {open && (
           <div className={styles.multiSelectDropdown}>
+            <label className={styles.multiSelectOption} style={{ fontWeight: 600, borderBottom: '1px solid var(--color-border)' }}>
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                className={styles.multiSelectCheckbox}
+              />
+              All
+            </label>
             {options.map((opt) => (
               <label key={opt} className={styles.multiSelectOption}>
                 <input
@@ -168,7 +187,7 @@ const ALL = "All";
 
 // ── Heat map component ──────────────────────────────────────────────────
 
-function HeatMap({ rows }: { rows: SummaryRow[] }) {
+function HeatMap({ rows, onDrillDown }: { rows: SummaryRow[]; onDrillDown?: (row: SummaryRow) => void }) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
@@ -294,6 +313,7 @@ function HeatMap({ rows }: { rows: SummaryRow[] }) {
                 strokeWidth={hoveredIdx === idx ? 2 : 0.5}
                 style={{ cursor: "pointer" }}
                 opacity={hoveredIdx === idx ? 1 : 0.9}
+                onClick={() => onDrillDown?.(row)}
               />
 
               {/* Label inside rect if large enough */}
@@ -320,9 +340,9 @@ function HeatMap({ rows }: { rows: SummaryRow[] }) {
                           x={x + width / 2}
                           y={compactStartY + i * lineHeight}
                           textAnchor="middle"
-                          fontSize="10"
+                          fontSize="11"
                           fontWeight={i === 0 ? "600" : "400"}
-                          fill={i === 0 ? "var(--color-text)" : "#4b5563"}
+                          fill="white"
                           style={{ pointerEvents: "none" }}
                         >
                           {label}
@@ -340,9 +360,9 @@ function HeatMap({ rows }: { rows: SummaryRow[] }) {
                         x={x + width / 2}
                         y={startY + i * lineHeight}
                         textAnchor="middle"
-                        fontSize={i === 0 ? "11" : "10"}
+                        fontSize={i === 0 ? "12" : "11"}
                         fontWeight={i === 0 ? "600" : "400"}
-                        fill={i === 0 ? "var(--color-text)" : "#4b5563"}
+                        fill="white"
                         style={{ pointerEvents: "none" }}
                       >
                         {label}
@@ -407,7 +427,7 @@ function HeatMap({ rows }: { rows: SummaryRow[] }) {
                     x={tooltipX + tooltipWidth / 2}
                     y={tooltipY + tooltipPadding + (i + 1) * lineHeight}
                     textAnchor="middle"
-                    fontSize={i >= tooltipLines.length - 2 ? "11" : "10"}
+                    fontSize={i >= tooltipLines.length - 2 ? "12" : "11"}
                     fontWeight={i >= tooltipLines.length - 2 ? "600" : "400"}
                     fill={textColor}
                   >
@@ -425,7 +445,9 @@ function HeatMap({ rows }: { rows: SummaryRow[] }) {
 
 // ── Bar chart component ──────────────────────────────────────────────────
 
-function BarChart({ rows }: { rows: SummaryRow[] }) {
+type ChartMode = "value" | "percentage";
+
+function BarChart({ rows, mode }: { rows: SummaryRow[]; mode: ChartMode }) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [chartWidth, setChartWidth] = useState(800);
@@ -451,10 +473,125 @@ function BarChart({ rows }: { rows: SummaryRow[] }) {
     return <div style={{ padding: "1rem", textAlign: "center", color: "var(--color-text-secondary)" }}>No data to display</div>;
   }
 
-  const padding = { top: 40, right: 20, bottom: 60, left: 60 };
+  const padding = { top: 40, right: 20, bottom: 60, left: 80 };
   const innerWidth = chartWidth - padding.left - padding.right;
   const innerHeight = chartHeight - padding.top - padding.bottom;
 
+  // Different layouts for value vs percentage mode
+  if (mode === "value") {
+    // Value mode: show the difference (projected - current) in absolute dollars
+    const barWidth = Math.max(12, Math.floor(innerWidth / rows.length * 0.7));
+    const barSpacing = Math.floor(innerWidth / rows.length);
+
+    // Calculate differences
+    const differences = rows.map((r) => r.projectedValuation - r.currentValuation);
+    const dataMin = Math.min(...differences);
+    const dataMax = Math.max(...differences);
+    const padding10 = Math.max(5_000_000, (dataMax - dataMin) * 0.1);
+    const minVal = Math.min(dataMin - padding10, -5_000_000);
+    const maxVal = Math.max(dataMax + padding10, 5_000_000);
+    const range = maxVal - minVal;
+    const zeroY = padding.top + ((maxVal / range) * innerHeight);
+
+    return (
+      <div ref={containerRef} style={{ width: "100%", height: "100%", padding: "1rem", overflowX: "auto", overflowY: "auto" }}>
+        <svg width={chartWidth} height={chartHeight} style={{ display: "block" }}>
+          {/* Grid lines */}
+          {[0, 0.25, 0.5, 0.75, 1].map((frac) => {
+            const y = padding.top + frac * innerHeight;
+            const val = maxVal - frac * range;
+            return (
+              <g key={`gridline-${frac}`}>
+                <line x1={padding.left} y1={y} x2={chartWidth - padding.right} y2={y} stroke="var(--color-border)" strokeDasharray="2,2" strokeWidth="0.5" opacity="0.5" />
+                <text x={padding.left - 8} y={y + 4} textAnchor="end" fontSize="11" fill="var(--color-text-secondary)">
+                  ${(val / 1_000_000).toFixed(0)}M
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Zero line */}
+          <line x1={padding.left} y1={zeroY} x2={chartWidth - padding.right} y2={zeroY} stroke="var(--color-text-secondary)" strokeWidth="1" opacity="0.7" />
+
+          {/* Bars */}
+          {rows.map((row, idx) => {
+            const difference = row.projectedValuation - row.currentValuation;
+            const x = padding.left + idx * barSpacing + (barSpacing - barWidth) / 2;
+            const isPositive = difference >= 0;
+            const barColor = isPositive ? "var(--color-success)" : "var(--color-danger)";
+
+            // Calculate bar height and position correctly for positive/negative values
+            const absBarHeight = Math.abs((difference / range) * innerHeight);
+            const barY = isPositive ? zeroY - absBarHeight : zeroY;
+
+            // Build tooltip lines
+            const tooltipLines: string[] = [];
+            tooltipLines.push(row.scenario);
+            tooltipLines.push(row.metric);
+            if (row.sector && row.sector !== "All Sectors") tooltipLines.push(row.sector);
+            if (row.subSector) tooltipLines.push(row.subSector);
+            tooltipLines.push(`Current: $${(row.currentValuation / 1_000_000).toFixed(1)}M`);
+            tooltipLines.push(`Projected: $${(row.projectedValuation / 1_000_000).toFixed(1)}M`);
+            tooltipLines.push(`Change: ${difference >= 0 ? "+" : ""}$${(difference / 1_000_000).toFixed(1)}M (${row.pctChange >= 0 ? "+" : ""}${row.pctChange.toFixed(2)}%)`);
+
+            const tooltipWidth = 220;
+            const lineHeight = 16;
+            const tooltipPadding = 10;
+            const tooltipHeight = tooltipLines.length * lineHeight + tooltipPadding * 2;
+
+            const barCenterX = x + barWidth / 2;
+            const tooltipX = Math.max(padding.left, Math.min(chartWidth - padding.right - tooltipWidth, barCenterX - tooltipWidth / 2));
+            const tooltipY = Math.max(padding.top, barY - tooltipHeight - 10);
+
+            return (
+              <g key={`bar-${idx}`} onMouseEnter={() => setHoveredIdx(idx)} onMouseLeave={() => setHoveredIdx(null)}>
+                <rect x={x} y={barY} width={barWidth} height={absBarHeight} fill={barColor} opacity={hoveredIdx === idx ? 1 : 0.8} style={{ cursor: "pointer" }} />
+
+                {/* Tooltip */}
+                {hoveredIdx === idx && (
+                  <g>
+                    <rect x={tooltipX} y={tooltipY} width={tooltipWidth} height={tooltipHeight} fill="var(--color-surface)" stroke="var(--color-border)" strokeWidth="1.5" rx="4" style={{ filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.15))" }} />
+                    {tooltipLines.map((line, i) => {
+                      const isValueLine = i >= tooltipLines.length - 3;
+                      return (
+                        <text
+                          key={i}
+                          x={tooltipX + tooltipWidth / 2}
+                          y={tooltipY + tooltipPadding + (i + 1) * lineHeight}
+                          textAnchor="middle"
+                          fontSize={isValueLine ? "11" : "10"}
+                          fontWeight={i === tooltipLines.length - 1 ? "700" : isValueLine ? "600" : "400"}
+                          fill={i === tooltipLines.length - 1 ? (difference >= 0 ? "var(--color-success)" : "var(--color-danger)") : "var(--color-text-secondary)"}
+                        >
+                          {line}
+                        </text>
+                      );
+                    })}
+                  </g>
+                )}
+              </g>
+            );
+          })}
+
+          {/* Axes */}
+          <line x1={padding.left} y1={padding.top} x2={padding.left} y2={chartHeight - padding.bottom} stroke="var(--color-text)" strokeWidth="2" />
+          <line x1={padding.left} y1={chartHeight - padding.bottom} x2={chartWidth - padding.right} y2={chartHeight - padding.bottom} stroke="var(--color-text)" strokeWidth="2" />
+
+          {/* Y-axis label */}
+          <text x={20} y={padding.top - 10} fontSize="12" fill="var(--color-text)" fontWeight="600">
+            Change ($M)
+          </text>
+
+          {/* X-axis label */}
+          <text x={chartWidth / 2} y={chartHeight - 10} textAnchor="middle" fontSize="12" fill="var(--color-text)" fontWeight="600">
+            Scenario
+          </text>
+        </svg>
+      </div>
+    );
+  }
+
+  // Percentage mode: show % change bars
   const barWidth = Math.max(12, Math.floor(innerWidth / rows.length * 0.7));
   const barSpacing = Math.floor(innerWidth / rows.length);
 
@@ -564,16 +701,25 @@ export default function ReportExplorer() {
   const [reports, setReports] = useState<Report[]>([]);
   const [published, setPublished] = useState(true);
   const [reportId, setReportId] = useState("");
-  const [scenarios, setScenarios] = useState<string[]>([SCENARIOS[0]]);
-  const [metrics, setMetrics] = useState<string[]>([METRICS[0]]);
-  const [grouping, setGrouping] = useState<Grouping>("subSector");
-  const [sectors, setSectors] = useState<string[]>([...SECTOR_LIST]);
+
+  // Dynamic filters from API
+  const [availableScenarios, setAvailableScenarios] = useState<string[]>([]);
+  const [availableMetrics, setAvailableMetrics] = useState<string[]>([]);
+  const [availableSectors, setAvailableSectors] = useState<string[]>([]);
+  const [subSectorsBySector, setSubSectorsBySector] = useState<Record<string, string[]>>({});
+
+  const [scenarios, setScenarios] = useState<string[]>([]);
+  const [metrics, setMetrics] = useState<string[]>([]);
+  const [grouping, setGrouping] = useState<Grouping>("total");
+  const [sectors, setSectors] = useState<string[]>([]);
   const [subSectorFilter, setSubSectorFilter] = useState(ALL);
   const [displayMode, setDisplayMode] = useState<DisplayMode>("table");
+  const [chartMode, setChartMode] = useState<ChartMode>("percentage");
   const [run, setRun] = useState<ReportRun | null>(null);
   const [gridRows, setGridRows] = useState<SummaryRow[]>([]);
   const [modalRow, setModalRow] = useState<SummaryRow | null>(null);
   const [modalData, setModalData] = useState<RunDataRow[]>([]);
+  const [navHistory, setNavHistory] = useState<Array<{ grouping: Grouping; scenarios: string[]; metrics: string[]; sectors: string[] }>>([]);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const mainGridRef = useRef<AgGridReact<SummaryRow>>(null);
   const modalGridRef = useRef<AgGridReact<RunDataRow>>(null);
@@ -585,6 +731,23 @@ export default function ReportExplorer() {
       if (r.length > 0) setReportId(r[0].id);
     });
   }, []);
+
+  // ── Load filters when report changes ──
+  useEffect(() => {
+    if (!reportId) return;
+
+    climateImpactFilters(reportId).then((filters) => {
+      setAvailableScenarios(filters.scenarios);
+      setAvailableMetrics(filters.metrics);
+      setAvailableSectors(filters.sectors);
+      setSubSectorsBySector(filters.subSectorsBySector);
+
+      // Initialize selected filters with all available options
+      setScenarios(filters.scenarios.length > 0 ? [filters.scenarios[0]] : []);
+      setMetrics(filters.metrics.length > 0 ? [filters.metrics[0]] : []);
+      setSectors([...filters.sectors]);
+    });
+  }, [reportId]);
 
   // ── Derived report list ──
   const availableReports = reports.filter((r) => (published ? r.published : true));
@@ -598,11 +761,11 @@ export default function ReportExplorer() {
   const availableSubSectors = useMemo(() => {
     const all = new Set<string>();
     for (const sec of sectors) {
-      const subs = SUB_SECTORS_BY_SECTOR.get(sec);
-      if (subs) subs.forEach((s) => all.add(s));
+      const subs = subSectorsBySector[sec];
+      if (subs) subs.forEach((s: string) => all.add(s));
     }
     return [ALL, ...all];
-  }, [sectors]);
+  }, [sectors, subSectorsBySector]);
 
   if (subSectorFilter !== ALL && !availableSubSectors.includes(subSectorFilter)) {
     setSubSectorFilter(ALL);
@@ -614,7 +777,7 @@ export default function ReportExplorer() {
     const currentReportId = report.id;
     let cancelled = false;
 
-    const sectorsParam = sectors.length < SECTOR_LIST.length ? sectors : undefined;
+    const sectorsParam = sectors.length < availableSectors.length ? sectors : undefined;
 
     const load = async () => {
       let response;
@@ -648,7 +811,7 @@ export default function ReportExplorer() {
 
     load();
     return () => { cancelled = true; };
-  }, [report, scenarios, metrics, grouping, sectors, subSectorFilter]);
+  }, [report, scenarios, metrics, grouping, sectors, subSectorFilter, availableSectors]);
 
   // ── Column definitions ──
   const columnDefs = useMemo<ColDef<SummaryRow>[]>(() => {
@@ -699,6 +862,73 @@ export default function ReportExplorer() {
     setModalRow(null);
     setModalData([]);
   }, []);
+
+  // ── Heat map drill-down handler ──
+  const onHeatMapDrillDown = useCallback(
+    async (row: SummaryRow) => {
+      if (grouping === "total") {
+        // Save current state to history
+        setNavHistory((prev) => [...prev, { grouping, scenarios, metrics, sectors }]);
+        // Drill down to sector level, stay in heat map
+        setDisplayMode("heatmap");
+        setGrouping("sector");
+        setScenarios([row.scenario]);
+        setMetrics([row.metric]);
+      } else if (grouping === "sector") {
+        // Drill down to subsector level, stay in heat map
+        if (row.sector && row.sector !== "All Sectors") {
+          // Save current state to history
+          setNavHistory((prev) => [...prev, { grouping, scenarios, metrics, sectors }]);
+          setDisplayMode("heatmap");
+          setGrouping("subSector");
+          setSectors([row.sector]);
+          setScenarios([row.scenario]);
+          setMetrics([row.metric]);
+        }
+      } else {
+        // At subsector level, open detail modal
+        if (!report) return;
+        setModalRow(row);
+
+        const params: RunDataParams = {
+          reportId: report.id,
+          scenarios: [row.scenario],
+          metrics: [row.metric],
+        };
+        if (row.sector && row.sector !== "All Sectors") {
+          params.sectors = [row.sector];
+        }
+        if (row.subSector) {
+          params.subSectors = [row.subSector];
+        }
+
+        const { rows } = await climateImpactRunData(params);
+        setModalData(rows);
+        dialogRef.current?.showModal();
+      }
+    },
+    [grouping, scenarios, metrics, sectors, report]
+  );
+
+  // ── Back navigation handler ──
+  const onNavigateBack = useCallback(() => {
+    if (navHistory.length === 0) return;
+    const previous = navHistory[navHistory.length - 1];
+    setNavHistory((prev) => prev.slice(0, -1));
+    setGrouping(previous.grouping);
+    setScenarios(previous.scenarios);
+    setMetrics(previous.metrics);
+    setSectors(previous.sectors);
+    setDisplayMode("heatmap");
+  }, [navHistory]);
+
+  // ── Reset filters handler ──
+  const resetFilters = useCallback(() => {
+    setScenarios([...availableScenarios]);
+    setMetrics([...availableMetrics]);
+    setSectors([...availableSectors]);
+    setSubSectorFilter(ALL);
+  }, [availableScenarios, availableMetrics, availableSectors]);
 
   const modalDetailCols = useMemo<ColDef<RunDataRow>[]>(
     () => [
@@ -795,14 +1025,14 @@ export default function ReportExplorer() {
       <div className={styles.toolbar}>
         <MultiSelect
           label="Scenario"
-          options={SCENARIOS}
+          options={availableScenarios}
           selected={scenarios}
           onChange={setScenarios}
         />
 
         <MultiSelect
           label="Metric"
-          options={METRICS}
+          options={availableMetrics}
           selected={metrics}
           onChange={setMetrics}
         />
@@ -810,7 +1040,7 @@ export default function ReportExplorer() {
         {grouping !== "total" && (
           <MultiSelect
             label="Sector"
-            options={SECTOR_LIST}
+            options={availableSectors}
             selected={sectors}
             onChange={setSectors}
           />
@@ -835,6 +1065,37 @@ export default function ReportExplorer() {
             </select>
           </div>
         )}
+
+        <div className={styles.controlGroup}>
+          <label className={styles.label} style={{ visibility: "hidden" }}>Reset</label>
+          <button
+            type="button"
+            className={styles.actionBtn}
+            onClick={resetFilters}
+            title="Reset all filters to default (all)"
+          >
+            Reset Filters
+          </button>
+        </div>
+
+        <div style={{ marginLeft: "auto", display: "flex", gap: "0.5rem", alignItems: "flex-end" }}>
+          <button
+            type="button"
+            className={styles.actionBtn}
+            onClick={() => alert("🚧 Under Construction")}
+            title="Under Construction"
+          >
+            Diagnostics 🚧
+          </button>
+          <button
+            type="button"
+            className={styles.actionBtn}
+            onClick={() => alert("🚧 Under Construction")}
+            title="Under Construction"
+          >
+            Lumi Analysis 🚧
+          </button>
+        </div>
       </div>
 
       {/* ── Grid card ── */}
@@ -852,6 +1113,35 @@ export default function ReportExplorer() {
             </p>
           </div>
           <div className={styles.gridActions}>
+            {displayMode === "heatmap" && (
+              <button
+                type="button"
+                className={styles.actionBtn}
+                onClick={onNavigateBack}
+                disabled={navHistory.length === 0}
+                title="Go back to previous level"
+              >
+                ← Back
+              </button>
+            )}
+            {displayMode === "chart" && (
+              <div className={styles.segmentedToggle}>
+                <button
+                  type="button"
+                  className={`${styles.segBtn} ${chartMode === "value" ? styles.segBtnActive : ""}`}
+                  onClick={() => setChartMode("value")}
+                >
+                  Value
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.segBtn} ${chartMode === "percentage" ? styles.segBtnActive : ""}`}
+                  onClick={() => setChartMode("percentage")}
+                >
+                  Percentage
+                </button>
+              </div>
+            )}
             {displayMode === "table" && (
               <>
                 <button type="button" className={styles.actionBtn} onClick={() => downloadCsv(mainGridRef, columnDefs, `${report.name}.csv`)}>
@@ -884,10 +1174,10 @@ export default function ReportExplorer() {
             </div>
           )}
           {displayMode === "chart" && (
-            <BarChart rows={gridRows} />
+            <BarChart rows={gridRows} mode={chartMode} />
           )}
           {displayMode === "heatmap" && (
-            <HeatMap rows={gridRows} />
+            <HeatMap rows={gridRows} onDrillDown={onHeatMapDrillDown} />
           )}
         </div>
       </div>

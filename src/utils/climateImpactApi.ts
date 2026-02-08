@@ -87,6 +87,13 @@ export interface RunDataResponse {
   rows: RunDataRow[];
 }
 
+export interface FiltersResponse {
+  scenarios: string[];
+  metrics: string[];
+  sectors: string[];
+  subSectorsBySector: Record<string, string[]>;
+}
+
 // ── Constants (for UI drop-downs) ──────────────────────────────────────
 
 export const SCENARIOS = ["Base Case", "Optimistic", "Pessimistic", "Stress Test"];
@@ -246,6 +253,33 @@ function pct(cur: number, proj: number): number {
 /** GET /climate_impact_reports */
 export async function climateImpactReports(): Promise<Report[]> {
   return REPORTS_DATA;
+}
+
+/** GET /climate_impact_filters */
+export async function climateImpactFilters(reportId: string): Promise<FiltersResponse> {
+  // Validate report exists
+  findReport(reportId);
+
+  // In a real implementation, these would be derived from the report's actual data
+  // For now, return the same filters for all reports
+  const sectors = Array.from(new Set(ASSET_DEFS.map((a) => a.sector)));
+  const subSectorsBySector: Record<string, string[]> = {};
+
+  for (const a of ASSET_DEFS) {
+    if (!subSectorsBySector[a.sector]) {
+      subSectorsBySector[a.sector] = [];
+    }
+    if (!subSectorsBySector[a.sector].includes(a.subSector)) {
+      subSectorsBySector[a.sector].push(a.subSector);
+    }
+  }
+
+  return {
+    scenarios: [...SCENARIOS],
+    metrics: [...METRICS],
+    sectors,
+    subSectorsBySector,
+  };
 }
 
 /** GET /climate_impact_scenario_summary */

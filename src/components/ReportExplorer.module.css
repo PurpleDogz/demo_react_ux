@@ -342,3 +342,9 @@
   border-color: var(--color-border-focus);
   background: var(--color-surface-hover);
 }
+
+.actionBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
