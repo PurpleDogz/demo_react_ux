@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AgGridReact } from "ag-grid-react";
 import { AllCommunityModule, ModuleRegistry, ColDef, RowDoubleClickedEvent } from "ag-grid-community";
 import styles from "./ReportExplorer.module.css";
@@ -214,15 +215,39 @@ function HeatMap({ rows, onDrillDown, grouping }: { rows: SummaryRow[]; onDrillD
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
-        const width = containerRef.current.offsetWidth;
-        const height = containerRef.current.offsetHeight;
-        setContainerWidth(Math.max(400, width - 32));
-        setContainerHeight(Math.max(300, height - 32));
+        // Use clientWidth/clientHeight to get inner dimensions
+        // Subtract padding (1rem = 16px on each side = 32px total)
+        const padding = 32; // 2rem total
+        const width = containerRef.current.clientWidth - padding;
+        const height = containerRef.current.clientHeight - padding;
+        // Only update if we have valid dimensions
+        if (width > 0 && height > 0) {
+          setContainerWidth(Math.max(400, width));
+          setContainerHeight(Math.max(300, height));
+        }
       }
     };
-    updateDimensions();
-    window.addEventListener("resize", updateDimensions);
-    return () => window.removeEventListener("resize", updateDimensions);
+
+    // Use ResizeObserver for more reliable dimension updates
+    const resizeObserver = new ResizeObserver(() => {
+      updateDimensions();
+    });
+
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
+    // Double requestAnimationFrame to ensure layout is truly complete
+    const rafId1 = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        updateDimensions();
+      });
+    });
+
+    return () => {
+      resizeObserver.disconnect();
+      cancelAnimationFrame(rafId1);
+    };
   }, []);
 
   if (rows.length === 0) {
@@ -484,16 +509,39 @@ function BarChart({ rows, mode }: { rows: SummaryRow[]; mode: ChartMode }) {
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
-        const containerWidth = containerRef.current.offsetWidth;
-        const containerHeight = containerRef.current.offsetHeight;
-        const chartPadding = 32; // 1rem = 16px, so 2rem total = 32px
-        setChartWidth(Math.max(400, containerWidth - chartPadding * 2));
-        setChartHeight(Math.max(300, containerHeight - chartPadding * 2));
+        // Use clientWidth/clientHeight to get inner dimensions
+        // Subtract padding (1rem = 16px on each side = 32px total)
+        const padding = 32; // 2rem total
+        const width = containerRef.current.clientWidth - padding;
+        const height = containerRef.current.clientHeight - padding;
+        // Only update if we have valid dimensions
+        if (width > 0 && height > 0) {
+          setChartWidth(Math.max(400, width));
+          setChartHeight(Math.max(300, height));
+        }
       }
     };
-    updateDimensions();
-    window.addEventListener("resize", updateDimensions);
-    return () => window.removeEventListener("resize", updateDimensions);
+
+    // Use ResizeObserver for more reliable dimension updates
+    const resizeObserver = new ResizeObserver(() => {
+      updateDimensions();
+    });
+
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
+    // Double requestAnimationFrame to ensure layout is truly complete
+    const rafId1 = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        updateDimensions();
+      });
+    });
+
+    return () => {
+      resizeObserver.disconnect();
+      cancelAnimationFrame(rafId1);
+    };
   }, []);
 
   if (rows.length === 0) {
@@ -753,13 +801,88 @@ export default function ReportExplorer() {
   const mainGridRef = useRef<AgGridReact<SummaryRow>>(null);
   const modalGridRef = useRef<AgGridReact<RunDataRow>>(null);
 
+  // ── URL state management ──
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [urlStateLoaded, setUrlStateLoaded] = useState(false);
+
+  // Parse URL params on mount (runs once before filters are loaded)
+  useEffect(() => {
+    if (urlStateLoaded) return;
+
+    const params = new URLSearchParams(searchParams.toString());
+
+    // Read state from URL
+    const urlReportId = params.get("report");
+    const urlPublished = params.get("published");
+    const urlScenarios = params.get("scenarios");
+    const urlMetrics = params.get("metrics");
+    const urlGrouping = params.get("grouping") as Grouping | null;
+    const urlSectors = params.get("sectors");
+    const urlSubSector = params.get("subSector");
+    const urlDisplayMode = params.get("displayMode") as DisplayMode | null;
+    const urlChartMode = params.get("chartMode") as ChartMode | null;
+
+    // Apply URL state
+    if (urlReportId) setReportId(urlReportId);
+    if (urlPublished !== null) setPublished(urlPublished === "true");
+    if (urlScenarios) setScenarios(urlScenarios.split(","));
+    if (urlMetrics) setMetrics(urlMetrics.split(","));
+    if (urlGrouping) setGrouping(urlGrouping);
+    if (urlSectors) setSectors(urlSectors.split(","));
+    if (urlSubSector) setSubSectorFilter(urlSubSector);
+    if (urlDisplayMode) setDisplayMode(urlDisplayMode);
+    if (urlChartMode) setChartMode(urlChartMode);
+
+    setUrlStateLoaded(true);
+  }, [searchParams, urlStateLoaded]);
+
+  // Sync state to URL (debounced via timeout)
+  useEffect(() => {
+    if (!urlStateLoaded) return; // Don't update URL until we've loaded from it
+
+    const timeout = setTimeout(() => {
+      const params = new URLSearchParams();
+
+      if (reportId) params.set("report", reportId);
+      params.set("published", published.toString());
+      if (scenarios.length > 0) params.set("scenarios", scenarios.join(","));
+      if (metrics.length > 0) params.set("metrics", metrics.join(","));
+      params.set("grouping", grouping);
+      if (sectors.length > 0) params.set("sectors", sectors.join(","));
+      if (subSectorFilter !== ALL) params.set("subSector", subSectorFilter);
+      params.set("displayMode", displayMode);
+      params.set("chartMode", chartMode);
+
+      const newUrl = `${window.location.pathname}?${params.toString()}`;
+      router.replace(newUrl, { scroll: false });
+    }, 300); // 300ms debounce
+
+    return () => clearTimeout(timeout);
+  }, [
+    urlStateLoaded,
+    reportId,
+    published,
+    scenarios,
+    metrics,
+    grouping,
+    sectors,
+    subSectorFilter,
+    displayMode,
+    chartMode,
+    router,
+  ]);
+
   // ── Load reports on mount ──
   useEffect(() => {
     climateImpactReports().then((r) => {
       setReports(r);
-      if (r.length > 0) setReportId(r[0].id);
+      // Only set default reportId if URL didn't provide one
+      if (r.length > 0 && !reportId) {
+        setReportId(r[0].id);
+      }
     });
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load filters when report changes ──
   useEffect(() => {
@@ -771,12 +894,18 @@ export default function ReportExplorer() {
       setAvailableSectors(filters.sectors);
       setSubSectorsBySector(filters.subSectorsBySector);
 
-      // Initialize selected filters with all available options
-      setScenarios(filters.scenarios.length > 0 ? [filters.scenarios[0]] : []);
-      setMetrics(filters.metrics.length > 0 ? [filters.metrics[0]] : []);
-      setSectors([...filters.sectors]);
+      // Only initialize selected filters if they're empty (not set from URL)
+      if (scenarios.length === 0 && filters.scenarios.length > 0) {
+        setScenarios([filters.scenarios[0]]);
+      }
+      if (metrics.length === 0 && filters.metrics.length > 0) {
+        setMetrics([filters.metrics[0]]);
+      }
+      if (sectors.length === 0) {
+        setSectors([...filters.sectors]);
+      }
     });
-  }, [reportId]);
+  }, [reportId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Derived report list ──
   const availableReports = reports.filter((r) => (published ? r.published : true));
