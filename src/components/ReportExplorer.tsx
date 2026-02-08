@@ -120,7 +120,25 @@ function MultiSelect({
 // ── Cell renderers ──────────────────────────────────────────────────────
 
 function CurrencyCellRenderer(params: { value: number }) {
-  return <span>${params.value.toLocaleString()}</span>;
+  const value = params.value;
+
+  // Format large numbers with B/M/T abbreviations
+  let displayValue: string;
+  if (Math.abs(value) >= 1_000_000_000_000) {
+    // Trillions
+    displayValue = `$${(value / 1_000_000_000_000).toFixed(2)}T`;
+  } else if (Math.abs(value) >= 1_000_000_000) {
+    // Billions
+    displayValue = `$${(value / 1_000_000_000).toFixed(2)}B`;
+  } else if (Math.abs(value) >= 1_000_000) {
+    // Millions
+    displayValue = `$${(value / 1_000_000).toFixed(2)}M`;
+  } else {
+    // Less than a million, show full number
+    displayValue = `$${value.toLocaleString()}`;
+  }
+
+  return <span title={`$${value.toLocaleString()}`}>{displayValue}</span>;
 }
 
 function PctChangeCellRenderer(params: { value: number }) {
@@ -187,7 +205,7 @@ const ALL = "All";
 
 // ── Heat map component ──────────────────────────────────────────────────
 
-function HeatMap({ rows, onDrillDown }: { rows: SummaryRow[]; onDrillDown?: (row: SummaryRow) => void }) {
+function HeatMap({ rows, onDrillDown, grouping }: { rows: SummaryRow[]; onDrillDown?: (row: SummaryRow) => void; grouping: Grouping }) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
@@ -212,7 +230,7 @@ function HeatMap({ rows, onDrillDown }: { rows: SummaryRow[]; onDrillDown?: (row
   }
 
   // Find min/max change for color scaling
-  const maxAbsChange = Math.max(...rows.map((r) => Math.abs(r.pctChange)));
+  const maxAbsChange = Math.max(...rows.map((r) => Math.abs((((r.projectedValuation - r.currentValuation) / r.currentValuation) * 100))));
 
   // Improved treemap layout that fills the space
   const padding = 1;
@@ -299,7 +317,8 @@ function HeatMap({ rows, onDrillDown }: { rows: SummaryRow[]; onDrillDown?: (row
       <svg width={containerWidth} height={containerHeight} style={{ display: "block" }}>
         {/* Render all rectangles with inline labels */}
         {rects.map(({ x, y, width, height, row, idx }) => {
-          const color = getColor(row.pctChange);
+          const pctChange = (((row.projectedValuation - row.currentValuation) / row.currentValuation) * 100);
+          const color = getColor(pctChange);
 
           return (
             <g key={idx} onMouseEnter={() => setHoveredIdx(idx)} onMouseLeave={() => setHoveredIdx(null)}>
@@ -319,18 +338,25 @@ function HeatMap({ rows, onDrillDown }: { rows: SummaryRow[]; onDrillDown?: (row
               {/* Label inside rect if large enough */}
               {width > 60 && height > 30 && (() => {
                 const labels: string[] = [];
-                labels.push(row.scenario);
-                labels.push(row.metric);
-                if (row.sector && row.sector !== "All Sectors") labels.push(row.sector);
-                if (row.subSector) labels.push(row.subSector);
+
+                // For "total" grouping, show scenario and metric
+                if (grouping === "total") {
+                  labels.push(row.scenario);
+                  labels.push(row.metric);
+                } else {
+                  labels.push(row.scenario);
+                  labels.push(row.metric);
+                  if (row.sector && row.sector !== "All Sectors") labels.push(row.sector);
+                  if (row.subSector) labels.push(row.subSector);
+                }
 
                 const lineHeight = 14;
                 const startY = y + height / 2 - ((labels.length - 1) * lineHeight) / 2;
 
                 // Only show labels if they fit
                 if (labels.length * lineHeight > height - 10) {
-                  // Show only scenario and metric if not enough space
-                  const compactLabels = [row.scenario, row.metric];
+                  // Show compact version
+                  const compactLabels = grouping === "total" ? [row.scenario, row.metric] : [row.scenario, row.metric];
                   const compactStartY = y + height / 2 - lineHeight / 2;
                   return (
                     <>
@@ -385,7 +411,8 @@ function HeatMap({ rows, onDrillDown }: { rows: SummaryRow[]; onDrillDown?: (row
           if (row.sector && row.sector !== "All Sectors") tooltipLines.push(row.sector);
           if (row.subSector) tooltipLines.push(row.subSector);
           tooltipLines.push(`Projected: $${row.projectedValuation.toLocaleString()}`);
-          tooltipLines.push(`Change: ${row.pctChange >= 0 ? "+" : ""}${row.pctChange.toFixed(2)}%`);
+          const pctChange = parseFloat((((row.projectedValuation - row.currentValuation) / row.currentValuation) * 100).toFixed(2));
+          tooltipLines.push(`Change: ${pctChange >= 0 ? "+" : ""}${pctChange.toFixed(2)}%`);
 
           const tooltipWidth = 200;
           const lineHeight = 16;
@@ -414,7 +441,7 @@ function HeatMap({ rows, onDrillDown }: { rows: SummaryRow[]; onDrillDown?: (row
                 // Color the last line (percentage) based on positive/negative
                 const isPercentageLine = i === tooltipLines.length - 1;
                 const textColor = isPercentageLine
-                  ? row.pctChange >= 0
+                  ? pctChange >= 0
                     ? "var(--color-success)"
                     : "var(--color-danger)"
                   : i >= tooltipLines.length - 2
@@ -532,7 +559,8 @@ function BarChart({ rows, mode }: { rows: SummaryRow[]; mode: ChartMode }) {
             if (row.subSector) tooltipLines.push(row.subSector);
             tooltipLines.push(`Current: $${(row.currentValuation / 1_000_000).toFixed(1)}M`);
             tooltipLines.push(`Projected: $${(row.projectedValuation / 1_000_000).toFixed(1)}M`);
-            tooltipLines.push(`Change: ${difference >= 0 ? "+" : ""}$${(difference / 1_000_000).toFixed(1)}M (${row.pctChange >= 0 ? "+" : ""}${row.pctChange.toFixed(2)}%)`);
+            const pctChange = parseFloat((((row.projectedValuation - row.currentValuation) / row.currentValuation) * 100).toFixed(2));
+            tooltipLines.push(`Change: ${difference >= 0 ? "+" : ""}$${(difference / 1_000_000).toFixed(1)}M (${pctChange >= 0 ? "+" : ""}${pctChange.toFixed(2)}%)`);
 
             const tooltipWidth = 220;
             const lineHeight = 16;
@@ -596,8 +624,8 @@ function BarChart({ rows, mode }: { rows: SummaryRow[]; mode: ChartMode }) {
   const barSpacing = Math.floor(innerWidth / rows.length);
 
   // Calculate Y-axis range with 10% padding
-  const dataMin = Math.min(...rows.map((r) => r.pctChange));
-  const dataMax = Math.max(...rows.map((r) => r.pctChange));
+  const dataMin = Math.min(...rows.map((r) => (((r.projectedValuation - r.currentValuation) / r.currentValuation) * 100)));
+  const dataMax = Math.max(...rows.map((r) => (((r.projectedValuation - r.currentValuation) / r.currentValuation) * 100)));
   const padding10 = Math.max(5, (dataMax - dataMin) * 0.1);
   const minVal = Math.min(dataMin - padding10, -5);
   const maxVal = Math.max(dataMax + padding10, 5);
@@ -627,11 +655,12 @@ function BarChart({ rows, mode }: { rows: SummaryRow[]; mode: ChartMode }) {
         {/* Bars */}
         {rows.map((row, idx) => {
           const x = padding.left + idx * barSpacing + (barSpacing - barWidth) / 2;
-          const isPositive = row.pctChange >= 0;
+          const pctChange = (((row.projectedValuation - row.currentValuation) / row.currentValuation) * 100);
+          const isPositive = pctChange >= 0;
           const barColor = isPositive ? "var(--color-success)" : "var(--color-danger)";
 
           // Calculate bar height and position correctly for positive/negative values
-          const absBarHeight = Math.abs((row.pctChange / range) * innerHeight);
+          const absBarHeight = Math.abs((pctChange / range) * innerHeight);
           const barY = isPositive ? zeroY - absBarHeight : zeroY;
 
           // Build tooltip lines
@@ -640,7 +669,7 @@ function BarChart({ rows, mode }: { rows: SummaryRow[]; mode: ChartMode }) {
           tooltipLines.push(row.metric);
           if (row.sector && row.sector !== "All Sectors") tooltipLines.push(row.sector);
           if (row.subSector) tooltipLines.push(row.subSector);
-          tooltipLines.push(`${row.pctChange >= 0 ? "+" : ""}${row.pctChange.toFixed(2)}%`);
+          tooltipLines.push(`${pctChange >= 0 ? "+" : ""}${pctChange.toFixed(2)}%`);
 
           // Tooltip sizing based on content
           const tooltipWidth = 180;
@@ -668,7 +697,7 @@ function BarChart({ rows, mode }: { rows: SummaryRow[]; mode: ChartMode }) {
                       textAnchor="middle"
                       fontSize={i === tooltipLines.length - 1 ? "12" : "11"}
                       fontWeight={i === tooltipLines.length - 1 ? "700" : "400"}
-                      fill={i === tooltipLines.length - 1 ? "var(--color-text)" : "var(--color-text-secondary)"}
+                      fill={i === tooltipLines.length - 1 ? (pctChange >= 0 ? "var(--color-success)" : "var(--color-danger)") : "var(--color-text-secondary)"}
                     >
                       {line}
                     </text>
@@ -826,7 +855,17 @@ export default function ReportExplorer() {
     cols.push(
       { field: "currentValuation",   headerName: "Current Valuation",   width: 170, sortable: true, cellRenderer: CurrencyCellRenderer },
       { field: "projectedValuation", headerName: "Projected Valuation", width: 180, sortable: true, cellRenderer: CurrencyCellRenderer },
-      { field: "pctChange",          headerName: "% Change",            width: 120, sortable: true, cellRenderer: PctChangeCellRenderer },
+      {
+        headerName: "% Change",
+        width: 120,
+        sortable: true,
+        valueGetter: (params) => {
+          if (!params.data) return 0;
+          const { currentValuation, projectedValuation } = params.data;
+          return parseFloat((((projectedValuation - currentValuation) / currentValuation) * 100).toFixed(2));
+        },
+        cellRenderer: PctChangeCellRenderer
+      },
     );
     return cols;
   }, [grouping]);
@@ -937,7 +976,18 @@ export default function ReportExplorer() {
       { field: "subSector",           headerName: "SubSector",           width: 130, sortable: true },
       { field: "currentValuation",    headerName: "Current Valuation",   width: 160, sortable: true, cellRenderer: CurrencyCellRenderer },
       { field: "projectedValuation",  headerName: "Projected Valuation", width: 170, sortable: true, cellRenderer: CurrencyCellRenderer },
-      { field: "pctChange",           headerName: "% Change",            width: 110, sortable: true, cellRenderer: PctChangeCellRenderer },
+      {
+        headerName: "% Change",
+        width: 110,
+        sortable: true,
+        valueGetter: (params) => {
+          if (!params.data) return 0;
+          const { currentValuation, projectedValuation } = params.data;
+          return parseFloat((((projectedValuation - currentValuation) / currentValuation) * 100).toFixed(2));
+        },
+        cellRenderer: PctChangeCellRenderer
+      },
+      { field: "metricValue",         headerName: "Metric Value",        width: 130, sortable: true },
     ],
     []
   );
@@ -1177,7 +1227,7 @@ export default function ReportExplorer() {
             <BarChart rows={gridRows} mode={chartMode} />
           )}
           {displayMode === "heatmap" && (
-            <HeatMap rows={gridRows} onDrillDown={onHeatMapDrillDown} />
+            <HeatMap rows={gridRows} onDrillDown={onHeatMapDrillDown} grouping={grouping} />
           )}
         </div>
       </div>

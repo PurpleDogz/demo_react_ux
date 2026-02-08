@@ -29,11 +29,9 @@ export interface SummaryRow {
   subSector: string;
   currentValuation: number;
   projectedValuation: number;
-  pctChange: number;
 }
 
 export interface RunDataRow {
-  id: string;
   runId: string;
   scenario: string;
   metric: string;
@@ -42,7 +40,7 @@ export interface RunDataRow {
   asset: string;
   currentValuation: number;
   projectedValuation: number;
-  pctChange: number;
+  metricValue: number;
 }
 
 // ── Request / response shapes ──────────────────────────────────────────
@@ -179,14 +177,6 @@ const REPORTS_DATA: Report[] = [
 
 // ── Internal helpers ───────────────────────────────────────────────────
 
-function makeGuid(a: string, b: string, c: string, idx: number): string {
-  const hash = (a + b + c + idx)
-    .split("")
-    .reduce((h, ch) => ((h << 5) - h + ch.charCodeAt(0)) | 0, 0);
-  const hex = Math.abs(hash).toString(16).padStart(8, "0");
-  return `${hex.slice(0, 8)}-${hex.slice(0, 4)}-4${hex.slice(1, 4)}-a${hex.slice(2, 5)}-${hex.padEnd(12, "0").slice(0, 12)}`;
-}
-
 function findReport(reportId: string): Report {
   const r = REPORTS_DATA.find((r) => r.id === reportId);
   if (!r) throw new Error(`Report not found: ${reportId}`);
@@ -225,12 +215,12 @@ function generateRawRows(report: Report, scenario: string, metric: string): RunD
     const projected = Math.round(
       currentValuation * scenarioFactor * (1 + (seed % 7) * 0.008 - i * 0.003)
     );
-    const pctChange = parseFloat(
+    // metricValue is the percentage change
+    const metricValue = parseFloat(
       (((projected - currentValuation) / currentValuation) * 100).toFixed(2)
     );
 
     return {
-      id: makeGuid(report.id, scenario + metric, def.asset, i),
       runId,
       scenario,
       metric,
@@ -239,13 +229,9 @@ function generateRawRows(report: Report, scenario: string, metric: string): RunD
       asset: def.asset,
       currentValuation,
       projectedValuation: projected,
-      pctChange,
+      metricValue,
     };
   });
-}
-
-function pct(cur: number, proj: number): number {
-  return parseFloat((((proj - cur) / cur) * 100).toFixed(2));
 }
 
 // ── API methods ────────────────────────────────────────────────────────
@@ -302,7 +288,6 @@ export async function climateImpactScenarioSummary(
         subSector: "",
         currentValuation: cur,
         projectedValuation: proj,
-        pctChange: pct(cur, proj),
       });
     }
   }
@@ -340,7 +325,6 @@ export async function climateImpactSectorSummary(
           subSector: "",
           currentValuation: cur,
           projectedValuation: proj,
-          pctChange: pct(cur, proj),
         });
       }
     }
@@ -381,7 +365,6 @@ export async function climateImpactSubSectorSummary(
           subSector: children[0].subSector,
           currentValuation: cur,
           projectedValuation: proj,
-          pctChange: pct(cur, proj),
         });
       }
     }
